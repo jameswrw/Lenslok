@@ -21,6 +21,16 @@ struct ContentView: View {
             lenslok.unscramble(
                 image: Image(
                     ImageResource(
+                        name: "Rotated", bundle: Bundle.main
+                    )
+                )
+            )
+            .resizable()
+            .scaledToFit()
+            
+            lenslok.unscramble(
+                image: Image(
+                    ImageResource(
                         name: "GameCode", bundle: Bundle.main
                     )
                 )
@@ -38,6 +48,7 @@ struct ContentView: View {
             .resizable()
             .scaledToFit()
         }
+        .padding()
     }
 }
 

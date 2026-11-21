@@ -6,6 +6,12 @@
 import SwiftUI
 
 struct Lenslok {
+    
+    struct HorizontalGuides {
+        let guideLeft: Int
+        let guideRight: Int
+    }
+    
     // LensKey's Elite sample positions, expressed as percentages of the lens
     // selection width from the center guide. Nil denotes a blank column.
     private let eliteOffsets: [Int?] = [
@@ -33,8 +39,57 @@ struct Lenslok {
             ) else { return image }
 
             context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            let initialPixels = pixelsFromBuffer(buffer)
+            let background = Array(initialPixels[0..<channels])
+
+            // Find the angle with the strongest horizontal projection. Sampling every
+            // fourth pixel keeps the search inexpensive while tolerating JPEG edges.
+            let maximumSlope = 0.12
+            let padding = Int(Double(width) * maximumSlope) + 2
+            var foregroundPoints: [(x: Int, y: Int)] = []
+            for y in stride(from: 0, to: height, by: 4) {
+                for x in stride(from: 0, to: width, by: 4) {
+                    let pixel = (y * width + x) * channels
+                    if (0..<3).contains(where: {
+                        abs(Int(initialPixels[pixel + $0]) - Int(background[$0])) > 40
+                    }) {
+                        foregroundPoints.append((x, y))
+                    }
+                }
+            }
+            var bestSlope = 0.0
+            var bestCount = 0
+            for step in -24...24 {
+                let slope = Double(step) * 0.005
+                var projection = [Int](repeating: 0, count: height + 2 * padding)
+                for point in foregroundPoints {
+                    let intercept = point.y - Int((slope * Double(point.x)).rounded()) + padding
+                    projection[intercept / 4] += 1
+                }
+                let count = projection.max() ?? 0
+                if count > bestCount {
+                    bestCount = count
+                    bestSlope = slope
+                }
+            }
+
+            if abs(bestSlope) >= 0.01, bestCount > width / 16 {
+                // Straighten the entire image before using the existing guide and
+                // strip measurements. The background fills any exposed corners.
+                context.setFillColor(red: CGFloat(background[0]) / 255,
+                                     green: CGFloat(background[1]) / 255,
+                                     blue: CGFloat(background[2]) / 255,
+                                     alpha: CGFloat(background[3]) / 255)
+                context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+                context.saveGState()
+                context.translateBy(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
+                context.rotate(by: atan(bestSlope))
+                context.interpolationQuality = .none
+                context.draw(source, in: CGRect(x: -CGFloat(width) / 2, y: -CGFloat(height) / 2,
+                                                width: CGFloat(width), height: CGFloat(height)))
+                context.restoreGState()
+            }
             let original = pixelsFromBuffer(buffer)
-            let background = Array(original[0..<channels])
 
             func isForeground(_ x: Int, _ y: Int) -> Bool {
                 let index = (y * width + x) * channels
@@ -91,11 +146,13 @@ struct Lenslok {
             // Inspect both sides: the center guide can be clipped by the image edge,
             // so its shorter side does not necessarily contain the characters.
             // Ignore the outer and center guides when measuring the marks.
-            let scanRows = Array(centerStart..<guideY) + Array((guideY + 1)..<centerEnd)
+            let guideMargin = max(1, guideWidth / 100)
+            let scanRows = Array(centerStart..<max(centerStart, guideY - guideMargin))
+                + Array(min(centerEnd, guideY + guideMargin + 1)..<centerEnd)
             let margin = max(1, guideWidth / eliteOffsets.count)
             let scanLeft = guideLeft + margin
             let scanRight = guideRight - margin
-            let centerExclusion = max(1, centerRight - centerX)
+            let centerExclusion = max(guideWidth / 50, centerRight - centerX)
             let occupiedRows = scanRows.filter { y in
                 let foregroundCount = (scanLeft..<scanRight).reduce(into: 0) { count, x in
                     if abs(x - centerX) > centerExclusion && isForeground(x, y) {
