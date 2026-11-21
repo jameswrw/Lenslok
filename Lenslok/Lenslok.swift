@@ -88,11 +88,10 @@ struct Lenslok {
             let guideWidth = guideRight - guideLeft
             guard guideWidth > 0, centerEnd - centerStart > height / 4 else { return image }
 
-            // Find the character rows on the shorter side of the center guide.
+            // Inspect both sides: the center guide can be clipped by the image edge,
+            // so its shorter side does not necessarily contain the characters.
             // Ignore the outer and center guides when measuring the marks.
-            let scanRows = guideY - centerStart < centerEnd - guideY
-                ? Array(centerStart..<guideY)
-                : Array((guideY + 1)..<centerEnd)
+            let scanRows = Array(centerStart..<guideY) + Array((guideY + 1)..<centerEnd)
             let margin = max(1, guideWidth / eliteOffsets.count)
             let scanLeft = guideLeft + margin
             let scanRight = guideRight - margin
