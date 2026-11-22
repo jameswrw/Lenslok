@@ -1,61 +1,36 @@
 import SwiftUI
-import Playgrounds
 
 struct ContentView: View {
-    let lenslok = Lenslok()
-    
+    @State private var viewModel = LenslokViewModel()
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
-        VStack {
-            Text("Hello, world!")
-                .padding()
-            lenslok.unscramble(
-                image: Image(
-                    ImageResource(
-                        name: "Elite", bundle: Bundle.main
-                    )
-                )
-            )
-            .resizable()
-            .scaledToFit()
-            
-            lenslok.unscramble(
-                image: Image(
-                    ImageResource(
-                        name: "Rotated", bundle: Bundle.main
-                    )
-                )
-            )
-            .resizable()
-            .scaledToFit()
-            
-            lenslok.unscramble(
-                image: Image(
-                    ImageResource(
-                        name: "GameCode", bundle: Bundle.main
-                    )
-                )
-            )
-            .resizable()
-            .scaledToFit()
-            
-            lenslok.unscramble(
-                image: Image(
-                    ImageResource(
-                        name: "GameCode2", bundle: Bundle.main
-                    )
-                )
-            )
-            .resizable()
-            .scaledToFit()
+        Group {
+            if let frame = viewModel.frame {
+                frame
+                    .resizable()
+                    .scaledToFit()
+            } else if let message = viewModel.statusMessage {
+                Text(message)
+                    .multilineTextAlignment(.center)
+                    .padding()
+            } else {
+                ProgressView("Starting camera…")
+            }
         }
-        .padding()
+        .task(id: scenePhase) {
+            if scenePhase == .active {
+                await viewModel.start()
+            } else {
+                viewModel.stop()
+            }
+        }
+        .onDisappear {
+            viewModel.stop()
+        }
     }
 }
 
 #Preview {
     ContentView()
-}
-
-#Playground {
-    _ = 1 + 2
 }
