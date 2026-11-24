@@ -13,6 +13,8 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
     private let queue = DispatchQueue(label: "Lenslok.camera")
     private let context = CIContext()
     private let decoder = LenslokDecoder()
+    // Set to false to hide the detected-guide diagnostics.
+    private let showsGuideOverlay = true
     private var configured = false
     private var onFrame: (@Sendable (Result<CGImage, CameraError>) -> Void)?
 
@@ -73,6 +75,6 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let image = context.createCGImage(ciImage, from: ciImage.extent) else { return }
-        onFrame?(.success(decoder.unscramble(image: image)))
+        onFrame?(.success(decoder.unscramble(image: image, showsGuideOverlay: showsGuideOverlay)))
     }
 }
