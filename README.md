@@ -1,4 +1,4 @@
-# Live Lenslok Decoder for iPhone
+# Lenslok Decoder for iPhone
 
 This app decodes a Lenslok scrambled image revealing the two character code required to start your protected app. Simply, hold your phone so the scrambled region is inside the marked detection zone. For historical authenticity you may need to adjust the positioning of the phone and squint a bit to read the letters.
 
