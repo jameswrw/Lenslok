@@ -79,13 +79,32 @@ nonisolated struct LenslokDecoder {
         }
     }
 
+    enum LenslokTitle {
+        case ace
+        case artStudio
+        case elite
+        case graphicAdventureCreator
+        case jewelsOfDarkness
+        case princeOfMagik
+        case tomahawk
+        case ttRacer
+    }
+    
     // LensKey's Elite sample positions, expressed as percentages of the lens
     // selection width from the center guide. Nil denotes a blank column.
-    private let eliteOffsets: [Int?] = [
-        nil, -41, -57, -77, 10, -28, -19, nil,
-        nil, 43, -10, 22, 32, 77, 58, nil
+    private let lenslokOffsets: [LenslokTitle: [Int?]] = [
+        .ace:                       [nil, -81, -31,  13, -62, -41,  22, nil,  nil, -22,  39, 58, -12, 29, 70, nil],
+        .artStudio:                 [nil, -41, -30, -68, -52, -11, -20, nil,  nil,  32,  60, 11,  22, 49, 71, nil],
+        .elite:                     [nil, -41, -57, -77,  10, -28, -19, nil,  nil,  43, -10, 22,  32, 77, 58, nil],
+        .graphicAdventureCreator:   [nil, -77, -28,  -4, -19, -59, -39, nil,  nil,  20,  51, 10,  10, 66, 28, nil],
+        .jewelsOfDarkness:          [nil, -40, -57, -71,  14, -27, -21, nil,  nil,  42, -12, 22,  27, 67, 53, nil],
+        .princeOfMagik:             [nil, -27, -39, -71,  -6, -17, -48, nil,  nil,  51,  64,  7,  40, 17, 79, nil],
+        .tomahawk:                  [nil, -82, -31, -58, -20, -42,  10, nil,  nil, -10,  32, 65,  20, 44, 80, nil],
+        .ttRacer:                   [nil, -20, -41, -69, -53,   6, -29, nil,  nil,  -9,  64, 20,  46, 33, 81, nil]
     ]
-
+    
+    var title: LenslokTitle = .elite
+    
     @MainActor
     func unscramble(image: Image, showsGuideOverlay: Bool = false) -> Image {
         let renderer = ImageRenderer(content: image)
@@ -530,7 +549,7 @@ nonisolated struct LenslokDecoder {
         let guideMargin = max(1, guideWidth / 100)
         let scanRows = Array(centerStart..<max(centerStart, guideY - guideMargin))
             + Array(min(centerEnd, guideY + guideMargin + 1)..<centerEnd)
-        let margin = max(1, guideWidth / eliteOffsets.count)
+        let margin = max(1, guideWidth / lenslokOffsets[title]!.count)
         let scanLeft = guideLeft + margin
         let scanRight = guideRight - margin
         let centerExclusion = max(guideWidth / 50, centerRight - centerX)
@@ -571,12 +590,12 @@ nonisolated struct LenslokDecoder {
         let centerX = center.x
         // The outermost marks cover full strips; the table samples their centers.
         // Inset each edge by one output strip before fitting the outer offsets.
-        let sortedOffsets = eliteOffsets.compactMap { $0 }.sorted()
+        let sortedOffsets = lenslokOffsets[title]!.compactMap { $0 }.sorted()
         guard let minimumOffset = sortedOffsets.first,
               let maximumOffset = sortedOffsets.last,
               maximumOffset > minimumOffset else { return nil }
         let markWidth = Double(right - left)
-        let sampleSpan = markWidth * Double(eliteOffsets.count - 2) / Double(eliteOffsets.count)
+        let sampleSpan = markWidth * Double(lenslokOffsets[title]!.count - 2) / Double(lenslokOffsets[title]!.count)
         let selectionWidth = sampleSpan * 100 / Double(maximumOffset - minimumOffset)
         let samples = sortedOffsets.map {
             centerX + Int((selectionWidth * Double($0) / 100).rounded())
@@ -603,9 +622,9 @@ nonisolated struct LenslokDecoder {
         let samples = sampling.samples
         for y in top...bottom {
             for x in left..<right {
-                let slot = ((x - left + 1) * eliteOffsets.count - 1) / (right - left)
+                let slot = ((x - left + 1) * lenslokOffsets[title]!.count - 1) / (right - left)
                 let destination = (y * width + x) * channels
-                if let offset = eliteOffsets[slot],
+                if let offset = lenslokOffsets[title]![slot],
                    let sourceIndex = sortedOffsets.firstIndex(of: offset) {
                     // Sample the center of each encoded slice, as the lens does,
                     // and expand it to one column of the reconstructed characters.
