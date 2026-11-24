@@ -44,12 +44,32 @@ nonisolated struct LenslokDecoder {
         let width: Int
         let height: Int
         let channels: Int
+        private let foreground: [UInt8]
+        let foregroundCount: Int
+
+        init(pixels: [UInt8], background: [UInt8], width: Int, height: Int, channels: Int) {
+            self.pixels = pixels
+            self.background = background
+            self.width = width
+            self.height = height
+            self.channels = channels
+            var mask = [UInt8](repeating: 0, count: width * height)
+            var count = 0
+            for index in 0..<mask.count {
+                let pixel = index * channels
+                if abs(Int(pixels[pixel]) - Int(background[0])) > 40
+                    || abs(Int(pixels[pixel + 1]) - Int(background[1])) > 40
+                    || abs(Int(pixels[pixel + 2]) - Int(background[2])) > 40 {
+                    mask[index] = 1
+                    count += 1
+                }
+            }
+            foreground = mask
+            foregroundCount = count
+        }
 
         func isForeground(_ x: Int, _ y: Int) -> Bool {
-            let index = (y * width + x) * channels
-            return (0..<3).contains {
-                abs(Int(pixels[index + $0]) - Int(background[$0])) > 40
-            }
+            foreground[y * width + x] != 0
         }
     }
 
@@ -89,14 +109,24 @@ nonisolated struct LenslokDecoder {
                 pixels: initialPixels, background: background,
                 width: width, height: height, channels: channels
             )
-            if let slope = guideSlope(in: initialImage) {
-                straighten(source, in: context, background: background, slope: slope)
-            }
+            // A guide must contain at least this many foreground pixels.
+            guard initialImage.foregroundCount > width / 4 else { return source }
 
-            let original = PixelImage(
-                pixels: Array(buffer), background: background,
-                width: width, height: height, channels: channels
-            )
+            // Aligned guides are common; avoid the much more expensive angle
+            // search when both guides can already be located.
+            let original: PixelImage
+            if let guide = horizontalGuide(in: initialImage),
+               centerGuide(in: initialImage, guide: guide) != nil {
+                original = initialImage
+            } else if let slope = guideSlope(in: initialImage) {
+                straighten(source, in: context, background: background, slope: slope)
+                original = PixelImage(
+                    pixels: Array(buffer), background: background,
+                    width: width, height: height, channels: channels
+                )
+            } else {
+                return source
+            }
             guard let guide = horizontalGuide(in: original),
                   let center = centerGuide(in: original, guide: guide),
                   let marks = characterMarks(in: original, guide: guide, center: center),
@@ -112,9 +142,6 @@ nonisolated struct LenslokDecoder {
     private func guideSlope(in image: PixelImage) -> Double? {
         let width = image.width
         let height = image.height
-        let channels = image.channels
-        let initialPixels = image.pixels
-        let background = image.background
         // Find the angle with the strongest horizontal projection. Sampling every
         // fourth pixel keeps the search inexpensive while tolerating JPEG edges.
         let maximumSlope = 0.12
@@ -122,10 +149,7 @@ nonisolated struct LenslokDecoder {
         var foregroundPoints: [(x: Int, y: Int)] = []
         for y in stride(from: 0, to: height, by: 4) {
             for x in stride(from: 0, to: width, by: 4) {
-                let pixel = (y * width + x) * channels
-                if (0..<3).contains(where: {
-                    abs(Int(initialPixels[pixel + $0]) - Int(background[$0])) > 40
-                }) {
+                if image.isForeground(x, y) {
                     foregroundPoints.append((x, y))
                 }
             }
