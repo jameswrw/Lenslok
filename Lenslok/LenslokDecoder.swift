@@ -8,11 +8,6 @@
 import SwiftUI
 
 nonisolated struct LenslokDecoder {
-    struct HorizontalGuides {
-        let guideLeft: Int
-        let guideRight: Int
-    }
-
     private struct Guide {
         let y: Int
         let left: Int
@@ -34,8 +29,7 @@ nonisolated struct LenslokDecoder {
     }
 
     private struct Sampling {
-        let sortedOffsets: [Int]
-        let samples: [Int]
+        let columns: [Int?]
     }
 
     private struct PixelImage {
@@ -80,28 +74,24 @@ nonisolated struct LenslokDecoder {
     }
 
     enum LenslokTitle {
-        case ace
-        case artStudio
-        case elite
-        case graphicAdventureCreator
-        case jewelsOfDarkness
-        case princeOfMagik
-        case tomahawk
-        case ttRacer
+        case ace, artStudio, elite, graphicAdventureCreator
+        case jewelsOfDarkness, princeOfMagik, tomahawk, ttRacer
+
+        // Percentages of lens selection width from the center; nil is a blank.
+        // Table from Simon Owen's lenskey: https://github.com/simonowen/lenskey/
+        var offsets: [Int?] {
+            switch self {
+            case .ace:                     [nil, -81, -31,  13, -62, -41, 22,  nil, nil, -22,  39, 58, -12, 29, 70, nil]
+            case .artStudio:               [nil, -41, -30, -68, -52, -11, -20, nil, nil,  32,  60, 11,  22, 49, 71, nil]
+            case .elite:                   [nil, -41, -57, -77,  10, -28, -19, nil, nil,  43, -10, 22,  32, 77, 58, nil]
+            case .graphicAdventureCreator: [nil, -77, -28,  -4, -19, -59, -39, nil, nil,  20,  51, 10,  10, 66, 28, nil]
+            case .jewelsOfDarkness:        [nil, -40, -57, -71,  14, -27, -21, nil, nil,  42, -12, 22,  27, 67, 53, nil]
+            case .princeOfMagik:           [nil, -27, -39, -71,  -6, -17, -48, nil, nil,  51,  64,  7,  40, 17, 79, nil]
+            case .tomahawk:                [nil, -82, -31, -58, -20, -42,  10, nil, nil, -10,  32, 65,  20, 44, 80, nil]
+            case .ttRacer:                 [nil, -20, -41, -69, -53,   6, -29, nil, nil,  -9,  64, 20,  46, 33, 81, nil]
+            }
+        }
     }
-    
-    // LensKey's Elite sample positions, expressed as percentages of the lens
-    // selection width from the center guide. Nil denotes a blank column.
-    private let lenslokOffsets: [LenslokTitle: [Int?]] = [
-        .ace:                       [nil, -81, -31,  13, -62, -41,  22, nil,  nil, -22,  39, 58, -12, 29, 70, nil],
-        .artStudio:                 [nil, -41, -30, -68, -52, -11, -20, nil,  nil,  32,  60, 11,  22, 49, 71, nil],
-        .elite:                     [nil, -41, -57, -77,  10, -28, -19, nil,  nil,  43, -10, 22,  32, 77, 58, nil],
-        .graphicAdventureCreator:   [nil, -77, -28,  -4, -19, -59, -39, nil,  nil,  20,  51, 10,  10, 66, 28, nil],
-        .jewelsOfDarkness:          [nil, -40, -57, -71,  14, -27, -21, nil,  nil,  42, -12, 22,  27, 67, 53, nil],
-        .princeOfMagik:             [nil, -27, -39, -71,  -6, -17, -48, nil,  nil,  51,  64,  7,  40, 17, 79, nil],
-        .tomahawk:                  [nil, -82, -31, -58, -20, -42,  10, nil,  nil, -10,  32, 65,  20, 44, 80, nil],
-        .ttRacer:                   [nil, -20, -41, -69, -53,   6, -29, nil,  nil,  -9,  64, 20,  46, 33, 81, nil]
-    ]
     
     var title: LenslokTitle = .elite
     
@@ -120,17 +110,7 @@ nonisolated struct LenslokDecoder {
         let width = source.width
         let height = source.height
         let channels = 4
-        var pixels = [UInt8](repeating: 0, count: width * height * channels)
-
-        return pixels.withUnsafeMutableBytes { buffer in
-            guard let context = CGContext(
-                data: buffer.baseAddress, width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: width * channels,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return source }
-
-            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return withBitmap(of: source) { context, buffer in
             let initialPixels = Array(buffer)
             let background = Array(initialPixels[0..<channels])
             let initialImage = PixelImage(
@@ -212,6 +192,26 @@ nonisolated struct LenslokDecoder {
         }
     }
 
+    private func withBitmap(
+        of source: CGImage, fallback: CGImage? = nil,
+        _ operation: (CGContext, UnsafeMutableRawBufferPointer) -> CGImage
+    ) -> CGImage {
+        let channels = 4
+        let width = source.width
+        let height = source.height
+        var pixels = [UInt8](repeating: 0, count: width * height * channels)
+        return pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * channels,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return fallback ?? source }
+            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return operation(context, buffer)
+        }
+    }
+
     // The camera alignment rectangle is expressed in image coordinates.
     static func videoSearchRect(width: Int, height: Int) -> CGRect {
         CGRect(x: width / 100, y: height * 14 / 100,
@@ -224,15 +224,7 @@ nonisolated struct LenslokDecoder {
         let width = cropped.width
         let height = cropped.height
         let channels = 4
-        var pixels = [UInt8](repeating: 0, count: width * height * channels)
-        return pixels.withUnsafeMutableBytes { buffer in
-            guard let context = CGContext(
-                data: buffer.baseAddress, width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: width * channels,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return source }
-            context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return withBitmap(of: cropped, fallback: source) { context, buffer in
             var original = Array(buffer)
             let background = Array(original[0..<channels])
             var bright = PixelImage(pixels: original, background: background,
@@ -549,7 +541,7 @@ nonisolated struct LenslokDecoder {
         let guideMargin = max(1, guideWidth / 100)
         let scanRows = Array(centerStart..<max(centerStart, guideY - guideMargin))
             + Array(min(centerEnd, guideY + guideMargin + 1)..<centerEnd)
-        let margin = max(1, guideWidth / lenslokOffsets[title]!.count)
+        let margin = max(1, guideWidth / title.offsets.count)
         let scanLeft = guideLeft + margin
         let scanRight = guideRight - margin
         let centerExclusion = max(guideWidth / 50, centerRight - centerX)
@@ -590,12 +582,13 @@ nonisolated struct LenslokDecoder {
         let centerX = center.x
         // The outermost marks cover full strips; the table samples their centers.
         // Inset each edge by one output strip before fitting the outer offsets.
-        let sortedOffsets = lenslokOffsets[title]!.compactMap { $0 }.sorted()
+        let offsets = title.offsets
+        let sortedOffsets = offsets.compactMap { $0 }.sorted()
         guard let minimumOffset = sortedOffsets.first,
               let maximumOffset = sortedOffsets.last,
               maximumOffset > minimumOffset else { return nil }
         let markWidth = Double(right - left)
-        let sampleSpan = markWidth * Double(lenslokOffsets[title]!.count - 2) / Double(lenslokOffsets[title]!.count)
+        let sampleSpan = markWidth * Double(offsets.count - 2) / Double(offsets.count)
         let selectionWidth = sampleSpan * 100 / Double(maximumOffset - minimumOffset)
         let samples = sortedOffsets.map {
             centerX + Int((selectionWidth * Double($0) / 100).rounded())
@@ -603,7 +596,10 @@ nonisolated struct LenslokDecoder {
         guard let firstSample = samples.first, let lastSample = samples.last,
               firstSample >= 0, lastSample < width else { return nil }
 
-        return Sampling(sortedOffsets: sortedOffsets, samples: samples)
+        let columns = offsets.map { offset in
+            offset.flatMap { value in sortedOffsets.firstIndex(of: value).map { samples[$0] } }
+        }
+        return Sampling(columns: columns)
     }
 
     private func reconstruct(
@@ -618,19 +614,17 @@ nonisolated struct LenslokDecoder {
         let bottom = marks.bottom
         let left = marks.left
         let right = marks.right
-        let sortedOffsets = sampling.sortedOffsets
-        let samples = sampling.samples
+        let columns = sampling.columns
         for y in top...bottom {
             for x in left..<right {
-                let slot = ((x - left + 1) * lenslokOffsets[title]!.count - 1) / (right - left)
+                let slot = ((x - left + 1) * columns.count - 1) / (right - left)
                 let destination = (y * width + x) * channels
-                if let offset = lenslokOffsets[title]![slot],
-                   let sourceIndex = sortedOffsets.firstIndex(of: offset) {
+                if let sampleX = columns[slot] {
                     // Sample the center of each encoded slice, as the lens does,
                     // and expand it to one column of the reconstructed characters.
-                    let sourcePixel = (y * width + samples[sourceIndex]) * channels
+                    let sourcePixel = (y * width + sampleX) * channels
                     if binarize {
-                        let color: UInt8 = image.isForeground(samples[sourceIndex], y) ? 255 : 0
+                        let color: UInt8 = image.isForeground(sampleX, y) ? 255 : 0
                         for channel in 0..<3 { buffer[destination + channel] = color }
                         buffer[destination + 3] = 255
                     } else {
