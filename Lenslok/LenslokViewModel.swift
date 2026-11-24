@@ -11,16 +11,20 @@ import Observation
 @Observable
 final class LenslokViewModel {
     private let camera = CameraCapture()
-    private let decoder = LenslokDecoder()
     private(set) var frame: Image?
     private(set) var frameSize: CGSize = .zero
     private(set) var statusMessage: String?
+    var selectedTitle: LenslokDecoder.LenslokTitle = .elite {
+        didSet { camera.setTitle(selectedTitle) }
+    }
     private var isActive = false
 
     var captureSession: AVCaptureSession { camera.session }
 
     func unscramble(image: Image) -> Image {
-        decoder.unscramble(image: image)
+        var decoder = LenslokDecoder()
+        decoder.title = selectedTitle
+        return decoder.unscramble(image: image)
     }
 
     func start() async {

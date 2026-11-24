@@ -73,9 +73,24 @@ nonisolated struct LenslokDecoder {
         }
     }
 
-    enum LenslokTitle {
+    enum LenslokTitle: CaseIterable, Identifiable, Sendable {
         case ace, artStudio, elite, graphicAdventureCreator
         case jewelsOfDarkness, princeOfMagik, tomahawk, ttRacer
+
+        var id: Self { self }
+
+        var displayName: LocalizedStringResource {
+            switch self {
+            case .ace: "ACE"
+            case .artStudio: "Art Studio"
+            case .elite: "Elite"
+            case .graphicAdventureCreator: "Graphic Adventure Creator"
+            case .jewelsOfDarkness: "Jewels of Darkness"
+            case .princeOfMagik: "The Price of Magik"
+            case .tomahawk: "Tomahawk"
+            case .ttRacer: "TT Racer"
+            }
+        }
 
         // Percentages of lens selection width from the center; nil is a blank.
         // Table from Simon Owen's lenskey: https://github.com/simonowen/lenskey/

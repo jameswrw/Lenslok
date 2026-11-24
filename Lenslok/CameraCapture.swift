@@ -12,7 +12,8 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
     let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "Lenslok.camera")
     private let context = CIContext()
-    private let decoder = LenslokDecoder()
+    // The decoder is accessed only on the capture queue.
+    private var decoder = LenslokDecoder()
     // Set to false to hide the detected-guide diagnostics.
     private let showsGuideOverlay = true
     private var configured = false
@@ -35,6 +36,12 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
             if !self.session.isRunning {
                 self.session.startRunning()
             }
+        }
+    }
+
+    func setTitle(_ title: LenslokDecoder.LenslokTitle) {
+        queue.async {
+            self.decoder.title = title
         }
     }
 
