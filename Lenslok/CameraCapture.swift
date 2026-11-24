@@ -75,6 +75,6 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let image = context.createCGImage(ciImage, from: ciImage.extent) else { return }
-        onFrame?(.success(decoder.unscramble(image: image, showsGuideOverlay: showsGuideOverlay)))
+        onFrame?(.success(decoder.unscramble(image: image, showsGuideOverlay: showsGuideOverlay, videoMode: true)))
     }
 }

@@ -53,3 +53,12 @@ struct LenslokView: View {
     )
     LenslokView(sourceImage: image)
 }
+
+#Preview("Phone") {
+    let image = Image(
+        ImageResource(
+            name: "Phone", bundle: Bundle.main
+        )
+    )
+    LenslokView(sourceImage: image)
+}

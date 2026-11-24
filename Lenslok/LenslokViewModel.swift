@@ -13,6 +13,7 @@ final class LenslokViewModel {
     private let camera = CameraCapture()
     private let decoder = LenslokDecoder()
     private(set) var frame: Image?
+    private(set) var frameSize: CGSize = .zero
     private(set) var statusMessage: String?
     private var isActive = false
 
@@ -44,6 +45,7 @@ final class LenslokViewModel {
                 guard let self, self.isActive else { return }
                 switch result {
                 case .success(let image):
+                    self.frameSize = CGSize(width: image.width, height: image.height)
                     self.frame = Image(decorative: image, scale: 1).interpolation(.none)
                     self.statusMessage = nil
                 case .failure:

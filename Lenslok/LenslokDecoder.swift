@@ -94,7 +94,10 @@ nonisolated struct LenslokDecoder {
         return Image(decorative: unscramble(image: source, showsGuideOverlay: showsGuideOverlay), scale: 1).interpolation(.none)
     }
 
-    func unscramble(image source: CGImage, showsGuideOverlay: Bool = false) -> CGImage {
+    func unscramble(image source: CGImage, showsGuideOverlay: Bool = false, videoMode: Bool = false) -> CGImage {
+        if videoMode {
+            return unscrambleVideoFrame(source, showsGuideOverlay: showsGuideOverlay)
+        }
         let width = source.width
         let height = source.height
         let channels = 4
@@ -187,6 +190,91 @@ nonisolated struct LenslokDecoder {
                 drawGuides(in: buffer, width: width, height: height, guide: guide, center: center)
             }
             return context.makeImage() ?? source
+        }
+    }
+
+    // The camera alignment rectangle is expressed in image coordinates.
+    static func videoSearchRect(width: Int, height: Int) -> CGRect {
+        CGRect(x: width / 100, y: height * 14 / 100,
+               width: width * 98 / 100, height: height * 42 / 100)
+    }
+
+    private func unscrambleVideoFrame(_ source: CGImage, showsGuideOverlay: Bool) -> CGImage {
+        let search = Self.videoSearchRect(width: source.width, height: source.height)
+        guard let cropped = source.cropping(to: search) else { return source }
+        let width = cropped.width
+        let height = cropped.height
+        let channels = 4
+        var pixels = [UInt8](repeating: 0, count: width * height * channels)
+        return pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * channels,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return source }
+            context.draw(cropped, in: CGRect(x: 0, y: 0, width: width, height: height))
+            var original = Array(buffer)
+            let background = Array(original[0..<channels])
+            var bright = PixelImage(pixels: original, background: background,
+                                    width: width, height: height, channels: channels,
+                                    brightGuides: true)
+            let inputBright = bright
+            var detected = photographedGuides(in: bright)
+            var appliedSlope = 0.0
+            if detected == nil, let estimate = guideSlope(in: bright) {
+                // Thin camera lines can bias the coarse angle estimate. Check a
+                // few nearby angles and keep only a complete crosshair shape.
+                for adjustment in [0.0, 0.01, -0.01, 0.02, -0.02, 0.03, -0.03, 0.04, -0.04] {
+                    let slope = estimate + adjustment
+                    straighten(cropped, in: context, background: background, slope: slope)
+                    original = Array(buffer)
+                    bright = PixelImage(pixels: original, background: background,
+                                        width: width, height: height, channels: channels,
+                                        brightGuides: true)
+                    detected = photographedGuides(in: bright)
+                    if detected != nil {
+                        appliedSlope = slope
+                        break
+                    }
+                }
+            }
+            guard let (guide, center) = detected,
+                  guide.left > 2, guide.right < width - 2 else { return source }
+            // A bright stroke crossing the search boundary indicates a clipped
+            // crosshair. Its apparent endpoint cannot be used for sampling.
+            let edgeTop = max(0, guide.y - width / 12)
+            let edgeBottom = min(height, guide.y + width / 12)
+            guard !(edgeTop..<edgeBottom).contains(where: {
+                inputBright.isForeground(0, $0) || inputBright.isForeground(width - 1, $0)
+            }) else { return source }
+            guard let marks = characterMarks(in: bright, guide: guide, center: center, photographed: true),
+                  let sampling = samplingPositions(in: bright, marks: marks, center: center)
+            else { return source }
+            reconstruct(in: buffer, original: bright, marks: marks, sampling: sampling, binarize: true, blackBackground: true)
+            if showsGuideOverlay {
+                drawGuides(in: buffer, width: width, height: height, guide: guide, center: center)
+            }
+            guard let decoded = context.makeImage(),
+                  let full = CGContext(data: nil, width: source.width, height: source.height,
+                                       bitsPerComponent: 8, bytesPerRow: source.width * channels,
+                                       space: CGColorSpaceCreateDeviceRGB(),
+                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return source }
+            full.draw(source, in: CGRect(x: 0, y: 0, width: source.width, height: source.height))
+            let destination = CGRect(x: search.minX, y: CGFloat(source.height) - search.maxY,
+                                     width: search.width, height: search.height)
+            // Rotate the decoded patch back so it stays registered with the camera frame.
+            full.saveGState()
+            let inset = CGFloat(max(width, height)) * abs(appliedSlope) / 2 + 1
+            full.clip(to: destination.insetBy(dx: inset, dy: inset))
+            full.translateBy(x: destination.midX, y: destination.midY)
+            full.rotate(by: -atan(appliedSlope))
+            full.interpolationQuality = .none
+            full.draw(decoded, in: CGRect(x: -search.width / 2, y: -search.height / 2,
+                                          width: search.width, height: search.height))
+            full.restoreGState()
+            return full.makeImage() ?? source
         }
     }
 
@@ -342,11 +430,21 @@ nonisolated struct LenslokDecoder {
                 guard span > width / 4, span > bestWidth,
                       abs(2 * center.x - left - right) < span / 3 else { continue }
                 // The two short vertical end bars must also cross the horizontal.
-                let barOffset = max(3, span / 25)
+                let barOffset = max(3, span / 10)
+                func hasBar(near x: Int) -> Bool {
+                    let radius = max(2, width / 150)
+                    for sampleX in max(0, x - radius)...min(width - 1, x + radius) {
+                        for dy in -radius...radius {
+                            let above = y - barOffset + dy
+                            let below = y + barOffset + dy
+                            if above >= 0 && image.isForeground(sampleX, above) { return true }
+                            if below < height && image.isForeground(sampleX, below) { return true }
+                        }
+                    }
+                    return false
+                }
                 guard y >= barOffset, y + barOffset < height,
-                      (image.isForeground(left, y - barOffset) || image.isForeground(left, y + barOffset)),
-                      (image.isForeground(right, y - barOffset) || image.isForeground(right, y + barOffset))
-                else { continue }
+                      hasBar(near: left), hasBar(near: right) else { continue }
                 bestWidth = span
                 best = (Guide(y: y, left: left, right: right + 1), center)
             }
@@ -491,7 +589,7 @@ nonisolated struct LenslokDecoder {
 
     private func reconstruct(
         in buffer: UnsafeMutableRawBufferPointer, original image: PixelImage,
-        marks: Marks, sampling: Sampling, binarize: Bool = false
+        marks: Marks, sampling: Sampling, binarize: Bool = false, blackBackground: Bool = false
     ) {
         let width = image.width
         let channels = image.channels
@@ -521,6 +619,9 @@ nonisolated struct LenslokDecoder {
                             buffer[destination + channel] = original[sourcePixel + channel]
                         }
                     }
+                } else if binarize && blackBackground {
+                    for channel in 0..<3 { buffer[destination + channel] = 0 }
+                    buffer[destination + 3] = 255
                 } else {
                     for channel in 0..<channels {
                         buffer[destination + channel] = background[channel]
