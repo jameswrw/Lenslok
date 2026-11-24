@@ -17,6 +17,10 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
     // Set to false to hide the detected-guide diagnostics.
     private let showsGuideOverlay = true
     private var configured = false
+    private var videoOutput: AVCaptureVideoDataOutput?
+    #if os(iOS) || os(visionOS)
+    @MainActor private var rotationObserver: CameraRotationObserver?
+    #endif
     private var onFrame: (@Sendable (Result<CGImage, CameraError>) -> Void)?
 
     enum CameraError: Error {
@@ -70,13 +74,31 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
         }
         session.addInput(input)
         session.addOutput(output)
+        videoOutput = output
         #if os(iOS) || os(visionOS)
+        Task { @MainActor [weak self] in
+            self?.observeRotation(for: device)
+        }
         if let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(90) {
             connection.videoRotationAngle = 90
         }
         #endif
         return true
     }
+
+    #if os(iOS) || os(visionOS)
+    @MainActor
+    private func observeRotation(for device: AVCaptureDevice) {
+        rotationObserver = CameraRotationObserver(device: device) { [weak self] angle in
+            guard let self else { return }
+            self.queue.async {
+                guard let connection = self.videoOutput?.connection(with: .video),
+                      connection.isVideoRotationAngleSupported(angle) else { return }
+                connection.videoRotationAngle = angle
+            }
+        }
+    }
+    #endif
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -85,3 +107,20 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
         onFrame?(.success(decoder.unscramble(image: image, showsGuideOverlay: showsGuideOverlay, videoMode: true)))
     }
 }
+#if os(iOS) || os(visionOS)
+@MainActor
+private final class CameraRotationObserver {
+    private let coordinator: AVCaptureDevice.RotationCoordinator
+    private var observation: NSKeyValueObservation?
+
+    init(device: AVCaptureDevice, apply: @escaping @MainActor (CGFloat) -> Void) {
+        coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
+        apply(coordinator.videoRotationAngleForHorizonLevelCapture)
+        observation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: .new) { _, change in
+            guard let angle = change.newValue else { return }
+            MainActor.assumeIsolated { apply(angle) }
+        }
+    }
+}
+#endif
+
