@@ -6,3 +6,5 @@ The decoding table is taken from Simon Owen's [Lenskey](https://github.com/simon
 
 Here's a screenshot of a successful decoding if the OK calibration pattern for a 3D game of some renown where you can wander around a whole universe, and not just a single city, whilst possibly taking liberties with the law. I hear this kind of thing is all the rage these days.
 <img width="1311" height="603" alt="Lenslok-OK" src="https://github.com/user-attachments/assets/828f2de7-d9bf-4101-958e-7f954078cbde" />
+
+It's a work in progress, so some decoding schemes work better than others. Elite is pretty decent, but Tomahawk and TT Racer require more work.
