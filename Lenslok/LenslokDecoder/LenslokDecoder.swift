@@ -41,7 +41,7 @@ nonisolated struct LenslokDecoder {
         private let foreground: [UInt8]
         let foregroundCount: Int
 
-        init(pixels: [UInt8], background: [UInt8], width: Int, height: Int, channels: Int, brightGuides: Bool = false) {
+        init(pixels: [UInt8], background: [UInt8], width: Int, height: Int, channels: Int, brightGuides: Bool = false, darkGuides: Bool = false) {
             self.pixels = pixels
             self.background = background
             self.width = width
@@ -49,10 +49,14 @@ nonisolated struct LenslokDecoder {
             self.channels = channels
             var mask = [UInt8](repeating: 0, count: width * height)
             var count = 0
+            let backgroundLuminance = (77 * Int(background[0]) + 150 * Int(background[1]) + 29 * Int(background[2])) / 256
             for index in 0..<mask.count {
                 let pixel = index * channels
                 let isForeground: Bool
-                if brightGuides {
+                if darkGuides {
+                    let luminance = (77 * Int(pixels[pixel]) + 150 * Int(pixels[pixel + 1]) + 29 * Int(pixels[pixel + 2])) / 256
+                    isForeground = luminance < backgroundLuminance - 40
+                } else if brightGuides {
                     isForeground = pixels[pixel] > 180 && pixels[pixel + 1] > 180 && pixels[pixel + 2] > 180
                 } else {
                     isForeground = abs(Int(pixels[pixel]) - Int(background[0])) > 40
@@ -132,6 +136,31 @@ nonisolated struct LenslokDecoder {
                 pixels: initialPixels, background: background,
                 width: width, height: height, channels: channels
             )
+            // Tomahawk uses only a center line; other titles require their extra guides.
+            if title == .tomahawk || title == .ttRacer,
+               horizontalGuide(in: initialImage) == nil,
+               let (guide, center, marks) = singleGuide(in: initialImage),
+               let sampling = samplingPositions(in: initialImage, marks: marks, center: center) {
+                reconstruct(in: buffer, original: initialImage, marks: marks, sampling: sampling)
+                if showsGuideOverlay {
+                    drawGuides(in: buffer, width: width, height: height, guide: guide, center: center, showsHorizontal: false)
+                }
+                return context.makeImage() ?? source
+            }
+            if title == .tomahawk || title == .ttRacer, let slope = singleGuideSlope(in: initialImage) {
+                straighten(source, in: context, background: background, slope: slope)
+                let straightened = PixelImage(pixels: Array(buffer), background: background,
+                                              width: width, height: height, channels: channels)
+                if let (guide, center, marks) = singleGuide(in: straightened),
+                   let sampling = samplingPositions(in: straightened, marks: marks, center: center) {
+                    reconstruct(in: buffer, original: straightened, marks: marks, sampling: sampling)
+                    if showsGuideOverlay {
+                        drawGuides(in: buffer, width: width, height: height, guide: guide, center: center, showsHorizontal: false)
+                    }
+                    return context.makeImage() ?? source
+                }
+                context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            }
             // Photographs can have white margins unrelated to the dark screen.
             // Search for the complete bright guide shape before using the corner-based mask.
             if initialImage.foregroundCount > width * height / 3 {
@@ -163,6 +192,22 @@ nonisolated struct LenslokDecoder {
                     }
                     if showsGuideOverlay {
                         drawGuides(in: buffer, width: width, height: height, guide: guide, center: center)
+                    }
+                    return context.makeImage() ?? source
+                }
+            }
+
+            // Inverse screens may omit the horizontal bar altogether.
+            let backgroundLuminance = (77 * Int(background[0]) + 150 * Int(background[1]) + 29 * Int(background[2])) / 256
+            if backgroundLuminance > 128 {
+                let darkImage = PixelImage(pixels: initialPixels, background: background,
+                                           width: width, height: height, channels: channels, darkGuides: true)
+                if let (guide, center) = verticalGuides(in: darkImage),
+                   let marks = characterMarks(in: darkImage, guide: guide, center: center, verticalOnly: true),
+                   let sampling = samplingPositions(in: darkImage, marks: marks, center: center, guideWidth: guide.right - guide.left) {
+                    reconstruct(in: buffer, original: darkImage, marks: marks, sampling: sampling)
+                    if showsGuideOverlay {
+                        drawGuides(in: buffer, width: width, height: height, guide: guide, center: center, showsHorizontal: false)
                     }
                     return context.makeImage() ?? source
                 }
@@ -242,13 +287,26 @@ nonisolated struct LenslokDecoder {
         return withBitmap(of: cropped, fallback: source) { context, buffer in
             var original = Array(buffer)
             let background = Array(original[0..<channels])
+            let backgroundLuminance = (77 * Int(background[0]) + 150 * Int(background[1]) + 29 * Int(background[2])) / 256
+            let darkGuides = backgroundLuminance > 128
             var bright = PixelImage(pixels: original, background: background,
                                     width: width, height: height, channels: channels,
-                                    brightGuides: true)
+                                    brightGuides: !darkGuides, darkGuides: darkGuides)
             let inputBright = bright
+            var verticalOnly = false
+            var singleMarks: Marks?
             var detected = photographedGuides(in: bright)
+            if detected == nil && darkGuides {
+                detected = verticalGuides(in: bright)
+                verticalOnly = detected != nil
+            }
+            if detected == nil, title == .tomahawk || title == .ttRacer, let (guide, center, marks) = singleGuide(in: bright) {
+                detected = (guide, center)
+                singleMarks = marks
+                verticalOnly = true
+            }
             var appliedSlope = 0.0
-            if detected == nil, let estimate = guideSlope(in: bright) {
+            if detected == nil, let estimate = ((title == .tomahawk || title == .ttRacer) ? singleGuideSlope(in: bright) : guideSlope(in: bright)) {
                 // Thin camera lines can bias the coarse angle estimate. Check a
                 // few nearby angles and keep only a complete crosshair shape.
                 for adjustment in [0.0, 0.01, -0.01, 0.02, -0.02, 0.03, -0.03, 0.04, -0.04] {
@@ -257,8 +315,17 @@ nonisolated struct LenslokDecoder {
                     original = Array(buffer)
                     bright = PixelImage(pixels: original, background: background,
                                         width: width, height: height, channels: channels,
-                                        brightGuides: true)
+                                        brightGuides: !darkGuides, darkGuides: darkGuides)
                     detected = photographedGuides(in: bright)
+                    if detected == nil && darkGuides {
+                        detected = verticalGuides(in: bright)
+                        verticalOnly = detected != nil
+                    }
+                    if detected == nil, title == .tomahawk || title == .ttRacer, let (guide, center, marks) = singleGuide(in: bright) {
+                        detected = (guide, center)
+                        singleMarks = marks
+                        verticalOnly = true
+                    }
                     if detected != nil {
                         appliedSlope = slope
                         break
@@ -274,12 +341,15 @@ nonisolated struct LenslokDecoder {
             guard !(edgeTop..<edgeBottom).contains(where: {
                 inputBright.isForeground(0, $0) || inputBright.isForeground(width - 1, $0)
             }) else { return source }
-            guard let marks = characterMarks(in: bright, guide: guide, center: center, photographed: true),
-                  let sampling = samplingPositions(in: bright, marks: marks, center: center)
+            guard let marks = singleMarks ?? characterMarks(in: bright, guide: guide, center: center, photographed: true, verticalOnly: verticalOnly),
+                  let sampling = samplingPositions(in: bright, marks: marks, center: center,
+                                                   guideWidth: verticalOnly && singleMarks == nil ? guide.right - guide.left : nil)
             else { return source }
-            reconstruct(in: buffer, original: bright, marks: marks, sampling: sampling, binarize: true, blackBackground: true)
+            reconstruct(in: buffer, original: bright, marks: marks, sampling: sampling,
+                        binarize: true, blackBackground: !darkGuides, inverted: darkGuides)
             if showsGuideOverlay {
-                drawGuides(in: buffer, width: width, height: height, guide: guide, center: center)
+                drawGuides(in: buffer, width: width, height: height, guide: guide, center: center,
+                           showsHorizontal: !verticalOnly)
             }
             guard let decoded = context.makeImage(),
                   let full = CGContext(data: nil, width: source.width, height: source.height,
@@ -308,7 +378,7 @@ nonisolated struct LenslokDecoder {
     // Working in bitmap coordinates keeps the overlay aligned after straightening.
     private func drawGuides(
         in buffer: UnsafeMutableRawBufferPointer, width: Int, height: Int,
-        guide: Guide, center: CenterGuide?
+        guide: Guide, center: CenterGuide?, showsHorizontal: Bool = true
     ) {
         let thickness = max(1, width / 500)
         let dashLength = max(4, width / 80)
@@ -320,9 +390,11 @@ nonisolated struct LenslokDecoder {
             buffer[index + 2] = blue
             buffer[index + 3] = 255
         }
-        for x in guide.left..<guide.right where (x - guide.left) / dashLength % 2 == 0 {
-            for offset in 0..<thickness {
-                paint(x, guide.y + offset, red: 0, green: 255, blue: 0)
+        if showsHorizontal {
+            for x in guide.left..<guide.right where (x - guide.left) / dashLength % 2 == 0 {
+                for offset in 0..<thickness {
+                    paint(x, guide.y + offset, red: 0, green: 255, blue: 0)
+                }
             }
         }
         if let center {
@@ -478,6 +550,192 @@ nonisolated struct LenslokDecoder {
         return best
     }
 
+    // Estimate a vertical line's lean when it is too rotated to form a long
+    // uninterrupted run in a single column.
+    private func singleGuideSlope(in image: PixelImage) -> Double? {
+        let width = image.width
+        let height = image.height
+        func lineCenter(at y: Int) -> Int? {
+            var best: Int?
+            var start: Int?
+            for x in (width / 4)...(width * 3 / 4) {
+                if image.isForeground(x, y) {
+                    if start == nil { start = x }
+                } else if let first = start {
+                    let center = (first + x - 1) / 2
+                    if x - first < max(4, width / 40),
+                       best.map({ abs(center - width / 2) < abs($0 - width / 2) }) ?? true {
+                        best = center
+                    }
+                    start = nil
+                }
+            }
+            return best
+        }
+        let top = height / 4
+        let bottom = height * 3 / 4
+        guard let topX = lineCenter(at: top), let bottomX = lineCenter(at: bottom) else { return nil }
+        let slope = -Double(bottomX - topX) / Double(bottom - top)
+        return abs(slope) >= 0.01 && abs(slope) <= 0.12 ? slope : nil
+    }
+
+    // Tomahawk has no outer guides. Require a long, narrow central line with
+    // character marks on both sides and clear space at both ends.
+    private func singleGuide(in image: PixelImage) -> (Guide, CenterGuide, Marks)? {
+        let width = image.width
+        let height = image.height
+        let step = max(1, width / 800)
+        let gap = max(2, width / 500)
+        var candidates: [CenterGuide] = []
+
+        for x in stride(from: width / 4, to: width * 3 / 4, by: step) {
+            var start: Int?
+            var last = 0
+            for y in stride(from: 0, through: height + gap, by: step) {
+                if y < height && image.isForeground(x, y) {
+                    if start == nil { start = y }
+                    last = y
+                } else if let first = start, y - last > gap {
+                    if last - first > height / 3 {
+                        candidates.append(CenterGuide(x: x, right: x + step, start: first, end: last + 1))
+                    }
+                    start = nil
+                }
+            }
+        }
+
+        candidates.sort { ($0.end - $0.start) > ($1.end - $1.start) }
+        for rawCandidate in candidates.prefix(64) {
+            let length = rawCandidate.end - rawCandidate.start
+            // A slanted line can appear as a shorter vertical run. Reject it
+            // so that the rotation estimator can straighten the whole guide.
+            let searchRadius = max(3, width / 80)
+            let scanLeft = max(0, rawCandidate.x - searchRadius)
+            let scanRight = min(width - 1, rawCandidate.x + searchRadius)
+            let before = rawCandidate.start - gap - 1
+            let after = rawCandidate.end + gap
+            if before >= 0 && (scanLeft...scanRight).contains(where: { image.isForeground($0, before) }) { continue }
+            if after < height && (scanLeft...scanRight).contains(where: { image.isForeground($0, after) }) { continue }
+            let sampleY = rawCandidate.start + length / 10
+            var lineLeft = rawCandidate.x
+            var lineRight = rawCandidate.x
+            while lineLeft > 0 && image.isForeground(lineLeft - 1, sampleY) { lineLeft -= 1 }
+            while lineRight + 1 < width && image.isForeground(lineRight + 1, sampleY) { lineRight += 1 }
+            guard lineRight - lineLeft < max(4, width / 40) else { continue }
+            let candidate = CenterGuide(x: (lineLeft + lineRight) / 2, right: lineRight + 1,
+                                        start: rawCandidate.start, end: rawCandidate.end)
+            let middle = (candidate.start + candidate.end) / 2
+            let probe = max(3, width / 100)
+            guard candidate.x >= probe, candidate.x + probe < width,
+                  !image.isForeground(candidate.x - probe, candidate.start + length / 10),
+                  !image.isForeground(candidate.x + probe, candidate.start + length / 10),
+                  !image.isForeground(candidate.x - probe, candidate.end - length / 10 - 1),
+                  !image.isForeground(candidate.x + probe, candidate.end - length / 10 - 1) else { continue }
+
+            let radius = min(width / 2, length * 5 / 4)
+            let left = max(0, candidate.x - radius)
+            let right = min(width, candidate.x + radius)
+            let exclusion = max(probe, width / 100)
+            let rows = (candidate.start..<candidate.end).filter { y in
+                var count = 0
+                for x in left..<right where abs(x - candidate.x) > exclusion {
+                    if image.isForeground(x, y) { count += 1 }
+                }
+                return count > max(1, width / 150)
+            }
+            guard let top = rows.first, let bottom = rows.last,
+                  bottom - top >= 4, bottom - top < length / 2,
+                  top > candidate.start + length / 10,
+                  bottom < candidate.end - length / 10,
+                  abs((top + bottom) / 2 - middle) < length / 3 else { continue }
+
+            let columns = (left..<right).filter { x in
+                abs(x - candidate.x) > exclusion
+                    && rows.contains { image.isForeground(x, $0) }
+            }
+            guard let first = columns.first, let last = columns.last,
+                  first < candidate.x - exclusion, last > candidate.x + exclusion else { continue }
+
+            let marks = Marks(top: top, bottom: bottom, left: first, right: last + 1)
+            let guide = Guide(y: middle, left: first, right: last + 1)
+            return (guide, candidate, marks)
+        }
+        return nil
+    }
+
+    // Some titles draw only three vertical bars. Match their relative positions
+    // and lengths, then place the inferred baseline above the character marks.
+    private func verticalGuides(in image: PixelImage) -> (Guide, CenterGuide)? {
+        struct Stroke {
+            var left: Int
+            var right: Int
+            var start: Int
+            var end: Int
+            var x: Int { (left + right) / 2 }
+            var length: Int { end - start }
+        }
+
+        let width = image.width
+        let height = image.height
+        let step = max(1, width / 1000)
+        let maxGap = max(2, width / 500)
+        let minLength = max(height / 7, width / 20)
+        var strokes: [Stroke] = []
+
+        for x in stride(from: 0, to: width, by: step) {
+            var start: Int?
+            var last = 0
+            for y in stride(from: 0, through: height + maxGap, by: step) {
+                if y < height && image.isForeground(x, y) {
+                    if start == nil { start = y }
+                    last = y
+                } else if let first = start, y - last > maxGap {
+                    if last - first >= minLength {
+                        if let index = strokes.indices.last,
+                           x - strokes[index].right <= max(2, width / 200),
+                           abs(strokes[index].start - first) < maxGap * 2,
+                           abs(strokes[index].end - last) < maxGap * 2 {
+                            strokes[index].right = x
+                        } else {
+                            strokes.append(Stroke(left: x, right: x, start: first, end: last + 1))
+                        }
+                    }
+                    start = nil
+                }
+            }
+        }
+
+        // Broad filled regions and character strokes are not guide bars.
+        strokes = strokes.filter { $0.right - $0.left < max(4, width / 50) }
+        strokes.sort { $0.length > $1.length }
+        strokes = Array(strokes.prefix(32))
+        var best: (Guide, CenterGuide)?
+        var bestSpan = 0
+        for center in strokes {
+            for left in strokes where left.x < center.x {
+                for right in strokes where right.x > center.x {
+                    let span = right.x - left.x
+                    let outerLength = (left.length + right.length) / 2
+                    guard span > width / 4, span > bestSpan,
+                          abs(center.x * 2 - left.x - right.x) < span / 8,
+                          abs(left.length - right.length) < outerLength / 3,
+                          abs((left.start + left.end) - (right.start + right.end)) < outerLength / 2,
+                          center.length > outerLength * 3 / 2,
+                          center.start < min(left.start, right.start),
+                          center.end > max(left.end, right.end) else { continue }
+                    let top = (left.start + right.start) / 2
+                    let baseline = top + outerLength / 3
+                    guard baseline >= center.start, baseline < center.end else { continue }
+                    bestSpan = span
+                    best = (Guide(y: baseline, left: left.x, right: right.x + 1),
+                            CenterGuide(x: center.x, right: center.right + 1,
+                                        start: center.start, end: center.end))
+                }
+            }
+        }
+        return best
+    }
+
     private func horizontalGuide(in image: PixelImage) -> Guide? {
         let width = image.width
         let height = image.height
@@ -540,7 +798,7 @@ nonisolated struct LenslokDecoder {
         return CenterGuide(x: centerX, right: centerRight, start: centerStart, end: centerEnd)
     }
 
-    private func characterMarks(in image: PixelImage, guide: Guide, center: CenterGuide, photographed: Bool = false) -> Marks? {
+    private func characterMarks(in image: PixelImage, guide: Guide, center: CenterGuide, photographed: Bool = false, verticalOnly: Bool = false) -> Marks? {
         let guideWidth = guide.right - guide.left
         let guideLeft = guide.left
         let guideRight = guide.right
@@ -556,7 +814,7 @@ nonisolated struct LenslokDecoder {
         let guideMargin = max(1, guideWidth / 100)
         let scanRows = Array(centerStart..<max(centerStart, guideY - guideMargin))
             + Array(min(centerEnd, guideY + guideMargin + 1)..<centerEnd)
-        let margin = max(1, guideWidth / title.offsets.count)
+        let margin = max(1, guideWidth / (verticalOnly ? 64 : title.offsets.count))
         let scanLeft = guideLeft + margin
         let scanRight = guideRight - margin
         let centerExclusion = max(guideWidth / 50, centerRight - centerX)
@@ -590,7 +848,7 @@ nonisolated struct LenslokDecoder {
         return Marks(top: top, bottom: bottom, left: left, right: right)
     }
 
-    private func samplingPositions(in image: PixelImage, marks: Marks, center: CenterGuide) -> Sampling? {
+    private func samplingPositions(in image: PixelImage, marks: Marks, center: CenterGuide, guideWidth: Int? = nil) -> Sampling? {
         let width = image.width
         let left = marks.left
         let right = marks.right
@@ -604,7 +862,9 @@ nonisolated struct LenslokDecoder {
               maximumOffset > minimumOffset else { return nil }
         let markWidth = Double(right - left)
         let sampleSpan = markWidth * Double(offsets.count - 2) / Double(offsets.count)
-        let selectionWidth = sampleSpan * 100 / Double(maximumOffset - minimumOffset)
+        // Vertical-only guides provide a stable width even when the outer character strips are blank.
+        let selectionWidth = guideWidth.map { Double($0) / 2 }
+            ?? sampleSpan * 100 / Double(maximumOffset - minimumOffset)
         let samples = sortedOffsets.map {
             centerX + Int((selectionWidth * Double($0) / 100).rounded())
         }
@@ -619,7 +879,8 @@ nonisolated struct LenslokDecoder {
 
     private func reconstruct(
         in buffer: UnsafeMutableRawBufferPointer, original image: PixelImage,
-        marks: Marks, sampling: Sampling, binarize: Bool = false, blackBackground: Bool = false
+        marks: Marks, sampling: Sampling, binarize: Bool = false, blackBackground: Bool = false,
+        inverted: Bool = false
     ) {
         let width = image.width
         let channels = image.channels
@@ -639,8 +900,12 @@ nonisolated struct LenslokDecoder {
                     // and expand it to one column of the reconstructed characters.
                     let sourcePixel = (y * width + sampleX) * channels
                     if binarize {
-                        let color: UInt8 = image.isForeground(sampleX, y) ? 255 : 0
-                        for channel in 0..<3 { buffer[destination + channel] = color }
+                        let foreground = image.isForeground(sampleX, y)
+                        for channel in 0..<3 {
+                            buffer[destination + channel] = inverted
+                                ? (foreground ? 0 : background[channel])
+                                : (foreground ? 255 : 0)
+                        }
                         buffer[destination + 3] = 255
                     } else {
                         for channel in 0..<channels {

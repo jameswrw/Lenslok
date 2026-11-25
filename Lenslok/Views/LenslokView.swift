@@ -62,3 +62,32 @@ struct LenslokView: View {
     )
     LenslokView(sourceImage: image)
 }
+
+#Preview("Tomahawk") {
+    let image = Image(ImageResource(name: "Tomahawk", bundle: Bundle.main))
+    LenslokDecoder(title: .tomahawk).unscramble(image: image)
+        .resizable()
+        .scaledToFit()
+}
+
+#Preview("Inverse") {
+    let image = Image(
+        ImageResource(
+            name: "Inverse", bundle: Bundle.main
+        )
+    )
+    LenslokDecoder(title: .artStudio).unscramble(image: image)
+        .resizable()
+        .scaledToFit()
+}
+
+#Preview("ttRacer") {
+    let image = Image(
+        ImageResource(
+            name: "ttRacer", bundle: Bundle.main
+        )
+    )
+    LenslokDecoder(title: .artStudio).unscramble(image: image)
+        .resizable()
+        .scaledToFit()
+}
