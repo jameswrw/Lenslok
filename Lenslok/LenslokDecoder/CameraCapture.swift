@@ -13,7 +13,8 @@ nonisolated final class CameraCapture: NSObject, AVCaptureVideoDataOutputSampleB
     private let queue = DispatchQueue(label: "Lenslok.camera")
     private let context = CIContext()
     // The decoder is accessed only on the capture queue.
-    private var decoder = LenslokDecoder()
+    // Change to .vision to try the experimental contour-based recognizer.
+    private var decoder = LenslokDecoder(recognitionMethod: .vision)
     // Set to false to hide the detected-guide diagnostics.
     private let showsGuideOverlay = true
     private var configured = false

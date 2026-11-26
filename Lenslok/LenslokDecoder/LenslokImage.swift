@@ -54,7 +54,9 @@ nonisolated enum LenslokImage {
                     let luminance = (77 * Int(pixels[pixel]) + 150 * Int(pixels[pixel + 1]) + 29 * Int(pixels[pixel + 2])) / 256
                     isForeground = luminance < backgroundLuminance - 40
                 } else if brightGuides {
-                    isForeground = pixels[pixel] > 180 && pixels[pixel + 1] > 180 && pixels[pixel + 2] > 180
+                    // Bright guides can acquire a color cast from the camera or display.
+                    let luminance = (77 * Int(pixels[pixel]) + 150 * Int(pixels[pixel + 1]) + 29 * Int(pixels[pixel + 2])) / 256
+                    isForeground = luminance > 180
                 } else {
                     isForeground = abs(Int(pixels[pixel]) - Int(background[0])) > 40
                         || abs(Int(pixels[pixel + 1]) - Int(background[1])) > 40

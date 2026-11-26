@@ -46,7 +46,13 @@ nonisolated struct LenslokDecoder {
         }
     }
     
+    enum RecognitionMethod {
+        case standard
+        case vision
+    }
+
     var title: LenslokTitle = .elite
+    var recognitionMethod: RecognitionMethod = .standard
 
     private var recognizer: LenslokRecognizer { LenslokRecognizer(title: title) }
     private var sampler: LenslokSampler { LenslokSampler(title: title) }
@@ -61,6 +67,9 @@ nonisolated struct LenslokDecoder {
     }
 
     func unscramble(image source: CGImage, showsGuideOverlay: Bool = false, videoMode: Bool = false) -> CGImage {
+        if recognitionMethod == .vision {
+            return unscrambleWithVision(source, showsGuideOverlay: showsGuideOverlay, videoMode: videoMode)
+        }
         if videoMode {
             return unscrambleVideoFrame(source, showsGuideOverlay: showsGuideOverlay)
         }
@@ -194,6 +203,79 @@ nonisolated struct LenslokDecoder {
     static func videoSearchRect(width: Int, height: Int) -> CGRect {
         CGRect(x: width / 100, y: height * 14 / 100,
                width: width * 98 / 100, height: height * 42 / 100)
+    }
+
+    private func unscrambleWithVision(_ source: CGImage, showsGuideOverlay: Bool, videoMode: Bool) -> CGImage {
+        let search = videoMode ? Self.videoSearchRect(width: source.width, height: source.height)
+            : CGRect(x: 0, y: 0, width: source.width, height: source.height)
+        guard let cropped = source.cropping(to: search) else { return source }
+        let width = cropped.width
+        let height = cropped.height
+        return drawing.withBitmap(of: cropped, fallback: source) { context, buffer in
+            let pixels = Array(buffer)
+            let background = Array(pixels[0..<4])
+            let luminance = (77 * Int(background[0]) + 150 * Int(background[1]) + 29 * Int(background[2])) / 256
+            let darkOnLight = luminance > 128
+            var input = PixelImage(pixels: pixels, background: background, width: width, height: height, channels: 4,
+                                   brightGuides: videoMode && !darkOnLight, darkGuides: darkOnLight)
+            let vision = LenslokVisionRecognizer(title: title)
+            var detection = vision.recognize(input, darkOnLight: darkOnLight, photographed: videoMode)
+            var appliedSlope = 0.0
+            // A slightly tilted single guide can fail the vertical-line checks.
+            // Try nearby angles only when the initial Tomahawk detection fails.
+            if detection == nil && videoMode && title == .tomahawk {
+                for slope in [0.02, -0.02, 0.04, -0.04] {
+                    drawing.straighten(cropped, in: context, background: background, slope: slope)
+                    input = PixelImage(pixels: Array(buffer), background: background, width: width, height: height,
+                                       channels: 4, brightGuides: !darkOnLight, darkGuides: darkOnLight)
+                    detection = vision.recognize(input, darkOnLight: darkOnLight, photographed: true)
+                    if detection != nil {
+                        appliedSlope = slope
+                        break
+                    }
+                }
+            }
+            // Still images may be straightened before retrying contour detection.
+            if detection == nil && !videoMode {
+                let slope = (title == .tomahawk || title == .ttRacer)
+                    ? recognizer.singleGuideSlope(in: input) : recognizer.guideSlope(in: input)
+                if let slope {
+                    drawing.straighten(cropped, in: context, background: background, slope: slope)
+                    input = PixelImage(pixels: Array(buffer), background: background, width: width, height: height,
+                                       channels: 4, darkGuides: darkOnLight)
+                    detection = vision.recognize(input, darkOnLight: darkOnLight, photographed: false)
+                }
+            }
+            guard let detection,
+                  let sampling = sampler.samplingPositions(in: input, marks: detection.marks, center: detection.center,
+                                                           guideWidth: detection.guideWidth) else { return source }
+            drawing.reconstruct(in: buffer, original: input, marks: detection.marks, sampling: sampling,
+                                binarize: videoMode, blackBackground: videoMode && !darkOnLight,
+                                inverted: videoMode && darkOnLight)
+            if showsGuideOverlay {
+                drawing.drawGuides(in: buffer, width: width, height: height, guide: detection.guide,
+                                   center: detection.center, showsHorizontal: !detection.verticalOnly)
+            }
+            guard let decoded = context.makeImage() else { return source }
+            guard videoMode else { return decoded }
+            guard let full = CGContext(data: nil, width: source.width, height: source.height,
+                                       bitsPerComponent: 8, bytesPerRow: source.width * 4,
+                                       space: CGColorSpaceCreateDeviceRGB(),
+                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return source }
+            full.draw(source, in: CGRect(x: 0, y: 0, width: source.width, height: source.height))
+            let destination = CGRect(x: search.minX, y: CGFloat(source.height) - search.maxY,
+                                     width: search.width, height: search.height)
+            full.saveGState()
+            let inset = CGFloat(max(width, height)) * abs(appliedSlope) / 2 + 1
+            full.clip(to: destination.insetBy(dx: inset, dy: inset))
+            full.translateBy(x: destination.midX, y: destination.midY)
+            full.rotate(by: -atan(appliedSlope))
+            full.interpolationQuality = .none
+            full.draw(decoded, in: CGRect(x: -search.width / 2, y: -search.height / 2,
+                                          width: search.width, height: search.height))
+            full.restoreGState()
+            return full.makeImage() ?? source
+        }
     }
 
     private func unscrambleVideoFrame(_ source: CGImage, showsGuideOverlay: Bool) -> CGImage {

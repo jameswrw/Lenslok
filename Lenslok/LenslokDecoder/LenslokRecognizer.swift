@@ -170,7 +170,7 @@ nonisolated struct LenslokRecognizer {
 
     // Tomahawk has no outer guides. Require a long, narrow central line with
     // character marks on both sides and clear space at both ends.
-    func singleGuide(in image: PixelImage) -> (Guide, CenterGuide, Marks)? {
+    func singleGuide(in image: PixelImage, photographed: Bool = false) -> (Guide, CenterGuide, Marks)? {
         let width = image.width
         let height = image.height
         let step = max(1, width / 800)
@@ -210,11 +210,11 @@ nonisolated struct LenslokRecognizer {
             var lineRight = rawCandidate.x
             while lineLeft > 0 && image.isForeground(lineLeft - 1, sampleY) { lineLeft -= 1 }
             while lineRight + 1 < width && image.isForeground(lineRight + 1, sampleY) { lineRight += 1 }
-            guard lineRight - lineLeft < max(4, width / 40) else { continue }
+            guard lineRight - lineLeft < max(4, width / (photographed ? 25 : 40)) else { continue }
             let candidate = CenterGuide(x: (lineLeft + lineRight) / 2, right: lineRight + 1,
                                         start: rawCandidate.start, end: rawCandidate.end)
             let middle = (candidate.start + candidate.end) / 2
-            let probe = max(3, width / 100)
+            let probe = max(3, width / 100, photographed ? (lineRight - lineLeft) / 2 + 2 : 0)
             guard candidate.x >= probe, candidate.x + probe < width,
                   !image.isForeground(candidate.x - probe, candidate.start + length / 10),
                   !image.isForeground(candidate.x + probe, candidate.start + length / 10),
